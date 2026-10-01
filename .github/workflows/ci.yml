@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+      - run: go mod tidy
+      - run: go test ./...
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -v
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config -q
+      - run: sh scripts/integration.sh
+      - if: always()
+        run: docker compose down -v

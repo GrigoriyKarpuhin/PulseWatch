@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-api, namespace: pulsewatch}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pulsewatch-api}}
+  template:
+    metadata: {labels: {app: pulsewatch-api}}
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/api"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-api, key: API_KEY}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: pulsewatch-api, namespace: pulsewatch}
+spec:
+  selector: {app: pulsewatch-api}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-scheduler, namespace: pulsewatch}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pulsewatch-scheduler}}
+  template:
+    metadata: {labels: {app: pulsewatch-scheduler}}
+    spec:
+      containers:
+        - name: scheduler
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/scheduler"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-prober, namespace: pulsewatch}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: pulsewatch-prober}}
+  template:
+    metadata: {labels: {app: pulsewatch-prober}}
+    spec:
+      containers:
+        - name: prober
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/prober"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef: {name: pulsewatch, key: KAFKA_BROKERS}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-projector, namespace: pulsewatch}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pulsewatch-projector}}
+  template:
+    metadata: {labels: {app: pulsewatch-projector}}
+    spec:
+      containers:
+        - name: projector
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/projector"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef: {name: pulsewatch, key: KAFKA_BROKERS}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-publisher, namespace: pulsewatch}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pulsewatch-publisher}}
+  template:
+    metadata: {labels: {app: pulsewatch-publisher}}
+    spec:
+      containers:
+        - name: publisher
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/publisher"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef: {name: pulsewatch, key: KAFKA_BROKERS}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: pulsewatch-notifier, namespace: pulsewatch}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: pulsewatch-notifier}}
+  template:
+    metadata: {labels: {app: pulsewatch-notifier}}
+    spec:
+      containers:
+        - name: notifier
+          image: ghcr.io/your-user/pulsewatch-go:latest
+          command: ["/bin/notifier"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef: {name: pulsewatch, key: KAFKA_BROKERS}
+            - name: NOTIFY_WEBHOOK_URL
+              valueFrom:
+                configMapKeyRef: {name: pulsewatch, key: NOTIFY_WEBHOOK_URL}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: pulsewatch-analytics, namespace: pulsewatch}
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: analytics
+              image: ghcr.io/your-user/pulsewatch-python:latest
+              command: ["python", "analyze.py", "--once"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: {name: pulsewatch-db, key: DATABASE_URL}
+              resources: {requests: {cpu: 20m, memory: 64Mi}, limits: {memory: 256Mi}}

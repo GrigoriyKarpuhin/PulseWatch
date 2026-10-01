@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pulsewatch
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pulsewatch
+  namespace: pulsewatch
+data:
+  KAFKA_BROKERS: kafka.example.internal:9092
+  NOTIFY_WEBHOOK_URL: https://example.com/incident-webhook

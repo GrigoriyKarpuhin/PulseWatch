@@ -1,0 +1,144 @@
+name: pulsewatch
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: pulsewatch
+      POSTGRES_USER: pulsewatch
+      POSTGRES_PASSWORD: pulsewatch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulsewatch -d pulsewatch"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.1.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: CONTROLLER://:29093,PLAINTEXT://:19092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+
+  kafka-init:
+    image: apache/kafka:4.1.0
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - 'until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic probe-jobs --partitions 3 --replication-factor 1; do sleep 2; done; until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic check-results --partitions 3 --replication-factor 1; do sleep 2; done; until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic incident-events --partitions 3 --replication-factor 1; do sleep 2; done'
+    depends_on:
+      kafka:
+        condition: service_started
+
+  migrate:
+    build: ./go
+    command: ["/bin/migrate"]
+    environment: &app_env
+      DATABASE_URL: postgres://pulsewatch:pulsewatch@postgres:5432/pulsewatch?sslmode=disable
+      KAFKA_BROKERS: kafka:19092
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./go
+    command: ["/bin/api"]
+    environment: *app_env
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    build: ./go
+    command: ["/bin/scheduler"]
+    environment: *app_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+
+  prober:
+    build: ./go
+    command: ["/bin/prober"]
+    environment: *app_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+
+  projector:
+    build: ./go
+    command: ["/bin/projector"]
+    environment: *app_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+
+  publisher:
+    build: ./go
+    command: ["/bin/publisher"]
+    environment: *app_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+
+  notifier:
+    build: ./go
+    command: ["/bin/notifier"]
+    environment:
+      DATABASE_URL: postgres://pulsewatch:pulsewatch@postgres:5432/pulsewatch?sslmode=disable
+      KAFKA_BROKERS: kafka:19092
+      NOTIFY_WEBHOOK_URL: http://demo-webhook:8001/events
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      demo-webhook:
+        condition: service_started
+
+  demo-webhook:
+    image: python:3.12-alpine
+    volumes:
+      - ./python/demo_webhook.py:/app/demo_webhook.py:ro
+    command: ["python", "/app/demo_webhook.py"]
+    ports:
+      - "8081:8001"
+
+  analytics:
+    build: ./python
+    environment:
+      DATABASE_URL: postgres://pulsewatch:pulsewatch@postgres:5432/pulsewatch?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  demo-target:
+    image: python:3.12-alpine
+    command: ["python", "-m", "http.server", "8000"]
+
+volumes:
+  pgdata:
+  kafkadata:
